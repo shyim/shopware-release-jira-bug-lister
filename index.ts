@@ -1,76 +1,78 @@
-
-import fs from 'fs';
-import { parse } from 'csv-parse';
-import { Octokit } from "@octokit/rest";
-import { throttling } from "@octokit/plugin-throttling";
-
 if (process.argv.length < 4) {
-    console.error('Usage: bun index.ts <csv-file-path> <github-token>');
+    console.error('Usage: bun index.ts <jira-email> <jira-token> <sw-version>');
     process.exit(1);
 }
 
-const ThrottledOctokit = Octokit.plugin(throttling);
-const octokit = new Octokit({
-    auth: process.argv[3],
-    throttle: {
-        onRateLimit: (retryAfter, options, octokit, retryCount) => {
-          octokit.log.warn(
-            `Request quota exhausted for request ${options.method} ${options.url}`
-          );
-    
-          if (retryCount < 2) {
-            // Retry twice after hitting a rate limit error, then give up
-            octokit.log.info(`Retrying after ${retryAfter} seconds!`);
-            return true;
-          }
-        },
-        onSecondaryRateLimit: (retryAfter, options, octokit, retryCount) => {
-          octokit.log.warn(
-            `Secondary rate limit hit for request ${options.method} ${options.url}`
-          );
-    
-          if (retryCount < 2) {
-            // Retry twice after hitting a secondary rate limit error, then give up
-            octokit.log.info(`Retrying after ${retryAfter} seconds!`);
-            return true;
-          }
-        },
-      },
+const jiraEmail = process.argv[2];
+const jiraToken = process.argv[3];
+const swVersion = process.argv[4];
+
+
+const bodyData = {
+  "jql": `project = "Shopware Next" AND fixVersion = ${swVersion} and "Public[Dropdown]" = Yes`,
+  fields: ['summary', 'comment', "customfield_12101", "customfield_12100", "issuetype"]
+}
+
+const response = await fetch('https://shopware.atlassian.net/rest/api/3/search', {
+  method: 'POST',
+  body: JSON.stringify(bodyData),
+  headers: {
+    'Authorization': `Basic ${Buffer.from(
+      `${jiraEmail}:${jiraToken}`
+    ).toString('base64')}`,
+    'Accept': 'application/json',
+    'Content-Type': 'application/json'
+  }
 });
 
-async function searchIssue(jiraKey) {
-    try {
-        const searchQuery = `[created from ${jiraKey} repo:shopware/shopware`;
-        const result = await octokit.rest.search.issuesAndPullRequests({
-            q: searchQuery,
-            per_page: 1,
+const issues = await response.json();
+
+const contributedUsers = {};
+
+console.log("## Fixed bugs");
+console.log("");
+
+for (const issue of issues.issues) {
+  const user = issue.fields.customfield_12101;
+
+  if (!contributedUsers[user]) {
+    contributedUsers[user] = [];
+  }
+  contributedUsers[user].push(issue);
+
+  if (issue.fields.issuetype.name === 'Bug') {
+    let githubIssue: string|null = null;
+
+    issue.fields.comment.comments.forEach(comment => {
+
+      if (comment.author.accountId === '712020:701732c3-697a-4e59-b86b-d341af27666b') {
+        comment.body.content.forEach(content => {
+          content.content.forEach(block => {
+            const result = /\[created from (\d+)/gm.exec(block.text);
+
+            if (result) {
+              githubIssue = result[1];
+            }
+          });
         });
+      }
+    })
 
-        if (result.data.total_count > 0) {
-            const issue = result.data.items[0];
-            console.log(`* [${jiraKey}](${issue.html_url}) - ${issue.title}`);
-        }
-    } catch (error) {
-        console.error(`Error occurred: ${error.message}`);
+    if (githubIssue) {
+      console.log(`* [${issue.key}](https://github.com/shopware/shopware/issues/${githubIssue}) - ${issue.fields.summary}`);
     }
+  }
 }
 
-const csvFile = fs.readFileSync(process.argv[2], 'utf8');
+console.log("");
+console.log('## Credits');
+console.log("");
 
-const parsedLines = await new Promise((resolve, reject) => {
-    parse(csvFile, {
-        columns: true,
-        skip_empty_lines: true
-    }, (err, records) => {
-        if (err) {
-            reject(err);
-        } else {
-            resolve(records);
-        }
-    });
-}) as { 'Issue key': string }[];
-
-for (const record of parsedLines) {
-    await searchIssue(record['Issue key']);
-    await new Promise(resolve => setTimeout(resolve, 200));
+for (const user of Object.keys(contributedUsers)) {
+  console.log(`* [${user}](https://github.com/${user})`);
 }
+
+console.log("");
+
+console.log('Thanks to all diligent friends for helping us make Shopware better and better with each pull request!');
+console.log("");
