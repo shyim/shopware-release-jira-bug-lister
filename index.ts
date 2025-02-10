@@ -1,6 +1,6 @@
 if (process.argv.length < 4) {
-    console.error('Usage: bun index.ts <jira-email> <jira-token> <sw-version>');
-    process.exit(1);
+  console.error('Usage: bun index.ts <jira-email> <jira-token> <sw-version>');
+  process.exit(1);
 }
 
 const jiraEmail = process.argv[2];
@@ -27,6 +27,11 @@ const response = await fetch('https://shopware.atlassian.net/rest/api/3/search',
 
 const issues = await response.json();
 
+if (!response.ok) {
+  console.log(issues)
+  process.exit(1);
+}
+
 const contributedUsers = {};
 
 console.log("## Fixed bugs");
@@ -41,7 +46,7 @@ for (const issue of issues.issues) {
   contributedUsers[user].push(issue);
 
   if (issue.fields.issuetype.name === 'Bug') {
-    let githubIssue: string|null = null;
+    let githubIssue: string | null = null;
 
     issue.fields.comment.comments.forEach(comment => {
 
